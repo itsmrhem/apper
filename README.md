@@ -18,8 +18,9 @@ python -m server --url "https://example.com"
 ```
 
 - **`HANDSHAKE_COOKIE`** in `.env` is sent as `Cookie` unless you override with graph state `extra_http_headers`.
-- **`--wait-until networkidle0`** (default) maps to `goto_options.wait_until` for SPAs.
-- **`--no-goto-options`** uses API defaults.
+- **`--wait-until load`** (default) — Handshake and similar SPAs often **never** reach `networkidle0`, which triggers a 30s navigation timeout; use `load` or `domcontentloaded`, or `networkidle2` if you need stricter idleness.
+- **`--timeout-ms 60000`** (default, max allowed) — raises Cloudflare’s navigation timeout from the API default (30s).
+- **`--no-goto-options`** uses API defaults (short timeout — often fails on heavy SPAs).
 - **`--json`** prints the final state as JSON (truncates very large HTML).
 
 Console script: **`apper-render`** (same flags).
@@ -48,7 +49,7 @@ async def main():
         {
             "url": "https://…",
             "extra_http_headers": {"Cookie": "…"},
-            "goto_options": {"wait_until": "networkidle0"},
+            "goto_options": {"wait_until": "load", "timeout": 60000},
         }
     )
 

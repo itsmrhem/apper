@@ -7,6 +7,9 @@ from cloudflare import NOT_GIVEN, APIStatusError, AsyncCloudflare, CloudflareErr
 from server.config import Settings, get_settings
 from server.state import GraphState
 
+# Cloudflare goto_options.timeout max is 60000 ms; networkidle0 often never fires on SPAs (e.g. Handshake).
+_GOTO_TIMEOUT_MAX_MS = 60_000.0
+
 
 def _goto_options_for_sdk(raw: dict[str, Any] | None) -> Any:
     if not raw:
@@ -16,13 +19,17 @@ def _goto_options_for_sdk(raw: dict[str, Any] | None) -> Any:
         out["wait_until"] = raw["wait_until"]
     elif "waitUntil" in raw:
         out["wait_until"] = raw["waitUntil"]
-    if "timeout" in raw:
-        out["timeout"] = raw["timeout"]
+    if "timeout" in raw and raw["timeout"] is not None:
+        out["timeout"] = min(float(raw["timeout"]), _GOTO_TIMEOUT_MAX_MS)
     if "referer" in raw:
         out["referer"] = raw["referer"]
     elif "referrer" in raw:
         out["referer"] = raw["referrer"]
-    return out if out else NOT_GIVEN
+    if not out:
+        return NOT_GIVEN
+    out.setdefault("wait_until", "load")
+    out.setdefault("timeout", _GOTO_TIMEOUT_MAX_MS)
+    return out
 
 
 def _extra_headers(state: GraphState, settings: Settings) -> Any:
@@ -44,6 +51,13 @@ async def browser_render_node(state: GraphState) -> dict[str, Any]:
     goto = _goto_options_for_sdk(state.get("goto_options"))
     extra_headers = _extra_headers(state, settings)
 
+    best = state.get("best_attempt")
+    if best is None:
+        best = True
+    action_timeout = state.get("action_timeout_ms")
+    if action_timeout is None:
+        action_timeout = 60_000.0
+
     try:
         async with AsyncCloudflare(api_token=settings.cf_api_token) as client:
             html = await client.browser_rendering.content.create(
@@ -51,7 +65,9 @@ async def browser_render_node(state: GraphState) -> dict[str, Any]:
                 url=url,
                 set_extra_http_headers=extra_headers,
                 goto_options=goto,
-                timeout=120.0,
+                best_attempt=best,
+                action_timeout=action_timeout,
+                timeout=180.0,
             )
     except APIStatusError as exc:
         body_preview = exc.body
