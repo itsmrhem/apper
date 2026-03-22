@@ -5,6 +5,11 @@ class GraphState(TypedDict, total=False):
     """State for the Browser Rendering LangGraph."""
 
     url: str
+    # Puppeteer-style cookies; overrides file/env when set.
+    cookies: list[dict[str, Any]]
+    # JSON cookie file path (CLI --cookies-file wins over Settings).
+    cookies_path: str
+
     extra_http_headers: dict[str, str]
     # wait_until, timeout (ms, max 60000). Avoid networkidle0 on chatty SPAs like Handshake.
     goto_options: dict[str, Any]

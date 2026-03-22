@@ -37,9 +37,17 @@ def main() -> None:
         action="store_true",
         help="Print full state as JSON (HTML may be large)",
     )
+    parser.add_argument(
+        "--cookies-file",
+        metavar="PATH",
+        default="",
+        help="JSON array of {name, value, domain?, path?} (overrides HANDSHAKE_COOKIES_PATH from .env)",
+    )
     args = parser.parse_args()
 
     initial: dict[str, Any] = {"url": args.url}
+    if args.cookies_file.strip():
+        initial["cookies_path"] = args.cookies_file.strip()
     if not args.no_goto_options:
         initial["goto_options"] = {
             "wait_until": args.wait_until,

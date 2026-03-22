@@ -10,3 +10,5 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# Exported browser cookies (never commit real tokens)
+secrets/handshake_cookies.json

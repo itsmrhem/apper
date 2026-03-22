@@ -13,8 +13,10 @@ class Settings(BaseSettings):
 
     cf_account_id: str = ""
     cf_api_token: str = ""
-    """Optional default Cookie header for Handshake (can override per run in graph state)."""
+    """Optional raw ``Cookie`` header (good for quick tests; awkward for many/large cookies)."""
     handshake_cookie: str = ""
+    """Path to JSON cookie file (see README). Empty = do not load from disk."""
+    handshake_cookies_path: str = ""
 
     langchain_tracing_v2: bool = Field(
         default=False,
