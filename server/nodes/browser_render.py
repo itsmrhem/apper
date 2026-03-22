@@ -105,7 +105,7 @@ async def browser_render_node(state: GraphState) -> dict[str, Any]:
 
     try:
         async with AsyncCloudflare(api_token=settings.cf_api_token) as client:
-            html = await client.browser_rendering.content.create(
+            html = await client.browser_rendering.markdown.create(
                 account_id=settings.cf_account_id,
                 url=url,
                 cookies=cookies_arg,
