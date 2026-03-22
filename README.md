@@ -18,11 +18,23 @@ python -m server --url "https://example.com"
 ```
 
 - **`HANDSHAKE_COOKIE`** in `.env` is sent as `Cookie` unless you override with graph state `extra_http_headers`.
-- **`--wait-until networkidle0`** (default) maps to `gotoOptions.waitUntil` for SPAs.
+- **`--wait-until networkidle0`** (default) maps to `goto_options.wait_until` for SPAs.
 - **`--no-goto-options`** uses API defaults.
 - **`--json`** prints the final state as JSON (truncates very large HTML).
 
 Console script: **`apper-render`** (same flags).
+
+## LangSmith tracing
+
+Tracing is off by default. To send LangGraph runs to [LangSmith](https://docs.smith.langchain.com/):
+
+1. Set in `.env` (see [`.env.example`](.env.example)):
+   - `LANGCHAIN_TRACING_V2=true`
+   - `LANGCHAIN_API_KEY=` (or `LANGSMITH_API_KEY`)
+   - `LANGCHAIN_PROJECT=apper` (or `LANGSMITH_PROJECT`)
+2. Optional: `LANGCHAIN_ENDPOINT` / `LANGSMITH_ENDPOINT` (e.g. EU host).
+
+[`build_graph()`](server/graph.py) calls [`configure_langsmith()`](server/tracing.py), which copies these settings into `os.environ` so LangChain/LangGraph pick them up. You can also call `configure_langsmith()` yourself before invoking the graph if you load settings another way.
 
 ## Programmatic use
 
@@ -48,7 +60,8 @@ asyncio.run(main())
 - [`server/graph.py`](server/graph.py) — `StateGraph`: `START → browser_render → END`
 - [`server/nodes/browser_render.py`](server/nodes/browser_render.py) — Cloudflare `/content` `POST`
 - [`server/state.py`](server/state.py) — `GraphState`
-- [`server/config.py`](server/config.py) — env-based settings
+- [`server/config.py`](server/config.py) — env-based settings (incl. LangSmith)
+- [`server/tracing.py`](server/tracing.py) — `configure_langsmith()` → `os.environ`
 
 ## Risks
 

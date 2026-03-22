@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,23 @@ class Settings(BaseSettings):
     cf_api_token: str = ""
     """Optional default Cookie header for Handshake (can override per run in graph state)."""
     handshake_cookie: str = ""
+
+    langchain_tracing_v2: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING"),
+    )
+    langchain_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY"),
+    )
+    langchain_project: str = Field(
+        default="apper",
+        validation_alias=AliasChoices("LANGCHAIN_PROJECT", "LANGSMITH_PROJECT"),
+    )
+    langchain_endpoint: str = Field(
+        default="",
+        validation_alias=AliasChoices("LANGCHAIN_ENDPOINT", "LANGSMITH_ENDPOINT"),
+    )
 
 
 @lru_cache

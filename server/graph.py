@@ -2,9 +2,11 @@ from langgraph.graph import END, START, StateGraph
 
 from server.nodes.browser_render import browser_render_node
 from server.state import GraphState
+from server.tracing import configure_langsmith
 
 
 def build_graph():
+    configure_langsmith()
     g = StateGraph(GraphState)
     g.add_node("browser_render", browser_render_node)
     g.add_edge(START, "browser_render")
