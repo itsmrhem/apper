@@ -1,78 +1,20 @@
 """Single LangGraph node: Cloudflare Browser Rendering via the official Python SDK."""
 
-import json
-from pathlib import Path
 from typing import Any
 
 from cloudflare import NOT_GIVEN, APIStatusError, AsyncCloudflare, CloudflareError
 
-from server.config import Settings, get_settings
-from server.cookies import load_cookies_file
+from server.cf_render_common import (
+    extra_headers_for_sdk,
+    goto_options_for_sdk,
+    resolve_cookies,
+)
+from server.config import get_settings
 from server.state import GraphState
 
-# Cloudflare goto_options.timeout max is 60000 ms; networkidle0 often never fires on SPAs (e.g. Handshake).
-_GOTO_TIMEOUT_MAX_MS = 60_000.0
 
-
-def _goto_options_for_sdk(raw: dict[str, Any] | None) -> Any:
-    if not raw:
-        return NOT_GIVEN
-    out: dict[str, Any] = {}
-    if "wait_until" in raw:
-        out["wait_until"] = raw["wait_until"]
-    elif "waitUntil" in raw:
-        out["wait_until"] = raw["waitUntil"]
-    if "timeout" in raw and raw["timeout"] is not None:
-        out["timeout"] = min(float(raw["timeout"]), _GOTO_TIMEOUT_MAX_MS)
-    if "referer" in raw:
-        out["referer"] = raw["referer"]
-    elif "referrer" in raw:
-        out["referer"] = raw["referrer"]
-    if not out:
-        return NOT_GIVEN
-    out.setdefault("wait_until", "load")
-    out.setdefault("timeout", _GOTO_TIMEOUT_MAX_MS)
-    return out
-
-
-def _extra_headers(
-    state: GraphState,
-    settings: Settings,
-    *,
-    use_cookie_header: bool,
-) -> Any:
-    headers = dict(state.get("extra_http_headers") or {})
-    if (
-        use_cookie_header
-        and settings.handshake_cookie
-        and "Cookie" not in headers
-        and "cookie" not in headers
-    ):
-        headers["Cookie"] = settings.handshake_cookie
-    return headers if headers else NOT_GIVEN
-
-
-def _resolve_cookies(state: GraphState, settings: Settings) -> tuple[list[dict[str, Any]] | None, str | None]:
-    """Returns (cookies_for_api, error_message)."""
-    direct = state.get("cookies")
-    if direct is not None:
-        if not isinstance(direct, list):
-            return None, "State `cookies` must be a list of objects with name/value."
-        for i, item in enumerate(direct):
-            if not isinstance(item, dict) or "name" not in item or "value" not in item:
-                return None, f"State `cookies[{i}]` must be an object with name and value."
-        return direct, None
-
-    path_str = (state.get("cookies_path") or "").strip() or (settings.handshake_cookies_path or "").strip()
-    if not path_str:
-        return None, None
-    path = Path(path_str).expanduser()
-    if not path.is_file():
-        return None, f"Cookie file not found: {path}"
-    try:
-        return load_cookies_file(path), None
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return None, f"Invalid cookie file {path}: {exc}"
+def _is_empty_markdown(content: object) -> bool:
+    return not isinstance(content, str) or not content.strip()
 
 
 async def browser_render_node(state: GraphState) -> dict[str, Any]:
@@ -84,12 +26,17 @@ async def browser_render_node(state: GraphState) -> dict[str, Any]:
     if not url:
         return {"error": "State must include a non-empty `url`."}
 
-    cookie_rows, cookie_err = _resolve_cookies(state, settings)
+    cookie_rows, cookie_err = resolve_cookies(state, settings)
     if cookie_err:
         return {"error": cookie_err, "rendered_html": None, "cf_response": None}
 
-    goto = _goto_options_for_sdk(state.get("goto_options"))
-    extra_headers = _extra_headers(
+    goto = goto_options_for_sdk(state.get("goto_options"))
+    raw_goto = dict(state.get("goto_options") or {})
+    raw_goto["wait_until"] = "networkidle2"
+    raw_goto["timeout"] = min(float(raw_goto.get("timeout", 60_000)), 60_000.0)
+    goto_networkidle2 = goto_options_for_sdk(raw_goto)
+
+    extra_headers = extra_headers_for_sdk(
         state,
         settings,
         use_cookie_header=not bool(cookie_rows),
@@ -101,20 +48,55 @@ async def browser_render_node(state: GraphState) -> dict[str, Any]:
         best = True
     action_timeout = state.get("action_timeout_ms")
     if action_timeout is None:
-        action_timeout = 60_000.0
+        action_timeout = 120_000.0
+
+    settle = state.get("listing_markdown_wait_ms")
+    if settle is None:
+        settle = 8_000.0
+    try:
+        settle = float(settle)
+    except (TypeError, ValueError):
+        settle = 8_000.0
+
+    wait_primary = settle if settle > 0 else NOT_GIVEN
+    wait_long = max(settle, 12_000.0) if settle > 0 else 12_000.0
+
+    async def fetch_markdown(
+        client: AsyncCloudflare,
+        *,
+        goto_opts: Any,
+        wait_for_timeout: Any,
+    ) -> str | object:
+        return await client.browser_rendering.markdown.create(
+            account_id=settings.cf_account_id,
+            url=url,
+            cookies=cookies_arg,
+            set_extra_http_headers=extra_headers,
+            goto_options=goto_opts,
+            best_attempt=best,
+            action_timeout=action_timeout,
+            wait_for_timeout=wait_for_timeout,
+            timeout=180.0,
+        )
 
     try:
         async with AsyncCloudflare(api_token=settings.cf_api_token) as client:
-            html = await client.browser_rendering.markdown.create(
-                account_id=settings.cf_account_id,
-                url=url,
-                cookies=cookies_arg,
-                set_extra_http_headers=extra_headers,
-                goto_options=goto,
-                best_attempt=best,
-                action_timeout=action_timeout,
-                timeout=180.0,
-            )
+            html = await fetch_markdown(client, goto_opts=goto, wait_for_timeout=wait_primary)
+
+            if _is_empty_markdown(html):
+                html = await fetch_markdown(
+                    client,
+                    goto_opts=goto_networkidle2,
+                    wait_for_timeout=5_000.0,
+                )
+
+            if _is_empty_markdown(html):
+                html = await fetch_markdown(
+                    client,
+                    goto_opts=goto,
+                    wait_for_timeout=wait_long,
+                )
+
     except APIStatusError as exc:
         body_preview = exc.body
         if body_preview is not None and not isinstance(body_preview, str):
@@ -138,6 +120,17 @@ async def browser_render_node(state: GraphState) -> dict[str, Any]:
             "rendered_html": None,
             "cf_response": {"result_type": type(html).__name__},
             "error": "SDK returned non-string content.",
+        }
+
+    if _is_empty_markdown(html):
+        return {
+            "rendered_html": None,
+            "cf_response": None,
+            "error": (
+                "Browser Rendering returned empty markdown after load+settle, networkidle2, and a long settle. "
+                "Handshake often needs valid session cookies (HANDSHAKE_COOKIES_PATH), or try "
+                "--listing-settle-ms 15000 and --wait-until domcontentloaded."
+            ),
         }
 
     return {

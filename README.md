@@ -19,7 +19,7 @@ cp secrets/handshake_cookies.json.example secrets/handshake_cookies.json
 |----------|-------------|
 | **`HANDSHAKE_COOKIES_PATH`** | **Recommended.** JSON file: array of `{ "name", "value", "domain", "path" }` (same shape as browser devtools export / your snippet). Safe for long JWT-style values like `hss-global`. |
 | **`HANDSHAKE_COOKIE`** | One-line `Cookie` header (`a=b; c=d`) for quick tests. |
-| **Graph state** | `cookies` (list) or `cookies_path` (string) for one-off runs; CLI **`--cookies-file PATH`** sets `cookies_path` and overrides the env path. |
+| **Graph state** | `cookies` (list) or `cookies_path` (string) when invoking the graph from code. |
 
 If structured cookies are loaded from file or state, the node sends them via Cloudflare’s **`cookies`** API field. The auto **`HANDSHAKE_COOKIE`** header is skipped in that case to avoid duplicates; you can still set a `Cookie` header manually in `extra_http_headers` if you need both.
 
@@ -27,10 +27,10 @@ If structured cookies are loaded from file or state, the node sends them via Clo
 
 ```bash
 python -m server --url "https://example.com"
-python -m server --url "https://nyu.joinhandshake.com" --cookies-file secrets/handshake_cookies.json
+python -m server --url "https://nyu.joinhandshake.com"
 ```
 
-- Set **`HANDSHAKE_COOKIES_PATH`** in `.env` or pass **`--cookies-file`** so you don’t have to repeat the flag.
+- Set **`HANDSHAKE_COOKIES_PATH`** in `.env` to your `handshake_cookies.json` (see setup above).
 - **`--wait-until load`** (default) — Handshake and similar SPAs often **never** reach `networkidle0`, which triggers a 30s navigation timeout; use `load` or `domcontentloaded`, or `networkidle2` if you need stricter idleness.
 - **`--timeout-ms 60000`** (default, max allowed) — raises Cloudflare’s navigation timeout from the API default (30s).
 - **`--no-goto-options`** uses API defaults (short timeout — often fails on heavy SPAs).
