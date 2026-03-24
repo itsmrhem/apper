@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     handshake_cookie: str = ""
     """Path to JSON cookie file (see README). Empty = do not load from disk."""
     handshake_cookies_path: str = ""
+    """Optional Cloudflare Browser Rendering custom AI model (e.g. anthropic/claude-sonnet-4-20250514)."""
+    job_detail_custom_ai_model: str = ""
+    """Authorization header value for custom AI provider, e.g. 'Bearer <API_KEY>'."""
+    job_detail_custom_ai_authorization: str = ""
 
     langchain_tracing_v2: bool = Field(
         default=False,

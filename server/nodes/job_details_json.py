@@ -15,12 +15,9 @@ from server.config import get_settings
 from server.state import GraphState
 
 _JOB_DETAIL_PROMPT = (
-    "Extract data from this Handshake (joinhandshake.com) job posting. The app is a JavaScript SPA — "
-    "use every job-related heading, label, and body text you can see. "
-    "Return: job title (main heading), employer/organization name, location, employment type if shown, "
-    "application URL if shown, entire description, and a short summary (2–5 sentences). "
-    "You must fill `title` and `employer_name` with non-empty strings whenever any job title or employer "
-    "text is visible; do not return an empty object or all-blank fields if the posting is visible."
+    "Extract structured fields from this Handshake job page. "
+    "For `job_description`, copy the ENTIRE text of the job description"
+    "Return non-empty `title`, `employer_name`, and `description` whenever visible."
 )
 
 _JOB_DETAIL_RESPONSE_FORMAT: dict[str, Any] = {
@@ -33,13 +30,45 @@ _JOB_DETAIL_RESPONSE_FORMAT: dict[str, Any] = {
             "location": {"type": "string"},
             "employment_type": {"type": "string"},
             "application_url": {"type": "string"},
-            "description": {"type": "string"},
+            "job_description": {"type": "string"},
             "looking-for": {"type": "string"},
             "summary": {"type": "string"},
         },
-        "required": ["title", "employer_name"],
+        "required": ["title", "employer_name", "description"],
     },
 }
+
+_EXPAND_MORE_SCRIPT = """
+(() => {
+  const isVisible = (el) => {
+    const s = window.getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return s && s.visibility !== 'hidden' && s.display !== 'none' && r.width > 0 && r.height > 0;
+  };
+  const textOf = (el) => ((el.innerText || el.textContent || '').trim().toLowerCase());
+  const shouldClick = (el) => {
+    const t = textOf(el);
+    if (!t) return false;
+    return (
+      t === 'more' ||
+      t.includes('show more') ||
+      t.includes('see more') ||
+      t.includes('read more') ||
+      t.includes('view more')
+    );
+  };
+  const clickCandidates = () => {
+    const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], span, div'));
+    for (const el of nodes) {
+      if (!isVisible(el) || !shouldClick(el)) continue;
+      try { el.click(); } catch (_) {}
+    }
+  };
+  clickCandidates();
+  setTimeout(clickCandidates, 400);
+  setTimeout(clickCandidates, 900);
+})();
+"""
 
 
 def _unwrap_json_result(payload: object) -> object:
@@ -114,6 +143,23 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
     except (TypeError, ValueError):
         settle_ms = 8_000.0
 
+    custom_ai_model = (state.get("job_detail_custom_ai_model") or settings.job_detail_custom_ai_model or "").strip()
+    custom_ai_auth = (
+        state.get("job_detail_custom_ai_authorization")
+        or settings.job_detail_custom_ai_authorization
+        or ""
+    ).strip()
+    custom_ai_extra_body: dict[str, Any] | None = None
+    if custom_ai_model and custom_ai_auth:
+        custom_ai_extra_body = {
+            "custom_ai": [
+                {
+                    "model": custom_ai_model,
+                    "authorization": custom_ai_auth,
+                }
+            ]
+        }
+
     async def call_json_extract(
         client: AsyncCloudflare,
         *,
@@ -133,10 +179,12 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
                 prompt=_JOB_DETAIL_PROMPT,
                 response_format=_JOB_DETAIL_RESPONSE_FORMAT,
                 timeout=180.0,
+                extra_body=custom_ai_extra_body,
             )
         return await client.browser_rendering.json.create(
             account_id=settings.cf_account_id,
             url=url or "",
+            add_script_tag=[{"content": _EXPAND_MORE_SCRIPT}],
             cookies=cookies_arg,
             set_extra_http_headers=extra_headers,
             goto_options=goto_opts,
@@ -146,6 +194,7 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
             response_format=_JOB_DETAIL_RESPONSE_FORMAT,
             wait_for_timeout=wait_for_timeout,
             timeout=180.0,
+            extra_body=custom_ai_extra_body,
         )
 
     async def row_from_extract(
@@ -219,6 +268,7 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
             md = await client.browser_rendering.markdown.create(
                 account_id=settings.cf_account_id,
                 url=url,
+                add_script_tag=[{"content": _EXPAND_MORE_SCRIPT}],
                 cookies=cookies_arg,
                 set_extra_http_headers=extra_headers,
                 goto_options=goto,

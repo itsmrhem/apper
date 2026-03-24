@@ -39,3 +39,6 @@ class GraphState(TypedDict, total=False):
     job_detail_settle_timeout_ms: float
     # If /json still empty, render markdown then extract from that text (extra API calls).
     job_detail_markdown_fallback: bool
+    # Optional Cloudflare /json custom AI override.
+    job_detail_custom_ai_model: str
+    job_detail_custom_ai_authorization: str
