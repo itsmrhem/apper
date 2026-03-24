@@ -12,3 +12,5 @@ build/
 .ruff_cache/
 # Exported browser cookies (never commit real tokens)
 secrets/handshake_cookies.json.example
+# Resume source (commit only additional_experience.md.example)
+secrets/additional_experience.md
