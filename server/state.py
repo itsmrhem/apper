@@ -41,4 +41,3 @@ class GraphState(TypedDict, total=False):
     job_detail_markdown_fallback: bool
     # Optional Cloudflare /json custom AI override.
     job_detail_custom_ai_model: str
-    job_detail_custom_ai_authorization: str

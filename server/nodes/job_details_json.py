@@ -144,11 +144,7 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
         settle_ms = 8_000.0
 
     custom_ai_model = (state.get("job_detail_custom_ai_model") or settings.job_detail_custom_ai_model or "").strip()
-    custom_ai_auth = (
-        state.get("job_detail_custom_ai_authorization")
-        or settings.job_detail_custom_ai_authorization
-        or ""
-    ).strip()
+    custom_ai_auth = (settings.job_detail_custom_ai_authorization or "").strip()
     custom_ai_extra_body: dict[str, Any] | None = None
     if custom_ai_model and custom_ai_auth:
         custom_ai_extra_body = {
