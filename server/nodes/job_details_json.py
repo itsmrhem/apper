@@ -15,9 +15,21 @@ from server.config import get_settings
 from server.state import GraphState
 
 _JOB_DETAIL_PROMPT = (
-    "Extract structured fields from this Handshake job page. "
-    "For `job_description`, copy the ENTIRE text of the job description"
-    "Return non-empty `title`, `employer_name`, and `description` whenever visible."
+    "Extract structured fields from this Handshake job posting page. "
+    "Reply with ONLY one JSON object. Do not use markdown, do not wrap in ```, do not add any text before or after the JSON. "
+    "Every value must be a JSON string; use \"\" if a field is missing or unknown. "
+    "Include these keys exactly: title, employer_name, location, employment_type, job_description, looking_for, summary. "
+    "For job_description, use the full visible job description text. "
+    "If the description is extremely long, truncate job_description to at most 12000 characters and end with \" …[truncated]\" "
+    "so the overall reply stays valid JSON."
+)
+
+# When the API returns 422 (model text did not parse as schema JSON), retry with stricter size cap — common cause is truncated JSON.
+_JOB_DETAIL_PROMPT_RETRY = (
+    "Extract Handshake job fields. Output ONLY one JSON object, valid JSON, no markdown or code fences, no commentary. "
+    "All values must be strings; use \"\" if unknown. Keys: title, employer_name, location, employment_type, "
+    "job_description, looking_for, summary. "
+    "Keep job_description under 6000 characters (truncate with \" …[truncated]\" if needed); prioritize the start of the description."
 )
 
 _JOB_DETAIL_RESPONSE_FORMAT: dict[str, Any] = {
@@ -29,12 +41,20 @@ _JOB_DETAIL_RESPONSE_FORMAT: dict[str, Any] = {
             "employer_name": {"type": "string"},
             "location": {"type": "string"},
             "employment_type": {"type": "string"},
-            "application_url": {"type": "string"},
             "job_description": {"type": "string"},
-            "looking-for": {"type": "string"},
+            "looking_for": {"type": "string"},
             "summary": {"type": "string"},
         },
-        "required": ["title", "employer_name", "description"],
+        "required": [
+            "title",
+            "employer_name",
+            "location",
+            "employment_type",
+            "job_description",
+            "looking_for",
+            "summary",
+        ],
+        "additionalProperties": False,
     },
 }
 
@@ -45,28 +65,98 @@ _EXPAND_MORE_SCRIPT = """
     const r = el.getBoundingClientRect();
     return s && s.visibility !== 'hidden' && s.display !== 'none' && r.width > 0 && r.height > 0;
   };
-  const textOf = (el) => ((el.innerText || el.textContent || '').trim().toLowerCase());
-  const shouldClick = (el) => {
-    const t = textOf(el);
+  const inMainContent = (el) => {
+    let p = el;
+    for (let i = 0; i < 12 && p; i++, p = p.parentElement) {
+      const r = (p.getAttribute && p.getAttribute('role')) || '';
+      if (r === 'navigation' || r === 'banner') return false;
+      const id = ((p.id || '') + ' ' + (p.className || '')).toLowerCase();
+      if (id.includes('nav') && id.includes('header')) return false;
+    }
+    return true;
+  };
+  const norm = (t) => (String(t || '').replace(/\\s+/g, ' ').trim().toLowerCase());
+  const hasHandshakeViewMore = (el) => {
+    const cn = String((el.className != null && el.className) || '');
+    return cn.includes('view-more-button');
+  };
+  const shouldClickText = (t) => {
     if (!t) return false;
-    return (
-      t === 'more' ||
-      t.includes('show more') ||
-      t.includes('see more') ||
-      t.includes('read more') ||
-      t.includes('view more')
-    );
+    if (t.length > 120) return false;
+    if (/\\b(show|read|see|view)\\s+more\\b/.test(t)) return true;
+    if (/\\b(show|see)\\s+full(\\s+description)?\\b/.test(t)) return true;
+    if (/\\bexpand\\b/.test(t) && t.length <= 40) return true;
+    if (t === 'more' || t === '…' || t === '...' || t === '… more' || t === '... more') return true;
+    if (/^…\\s*more$/.test(t) || /^\\.\\.\\.\\s*more$/.test(t)) return true;
+    if (t.length <= 22 && /\\bmore\\b/.test(t)) return true;
+    return false;
+  };
+  const shouldClickAria = (rawAria) => {
+    const a = String(rawAria || '').trim().toLowerCase();
+    if (!a) return false;
+    if (/^show\\s+more\\b/.test(a)) return true;
+    if (/\\b(read|see|view)\\s+more\\b/.test(a)) return true;
+    if (/\\bexpand\\b/.test(a) && a.length < 200) return true;
+    return false;
+  };
+  const shouldClickEl = (el) => {
+    // Handshake official control: do not use inMainContent — some layouts nest oddly and we would skip.
+    if (hasHandshakeViewMore(el)) return isVisible(el);
+    if (!inMainContent(el)) return false;
+    const t = norm(el.innerText || el.textContent || '');
+    if (shouldClickText(t)) return true;
+    if (shouldClickAria(el.getAttribute('aria-label'))) return true;
+    return false;
+  };
+  const scrollNudge = () => {
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      window.scrollTo({ top: document.documentElement.scrollHeight, left: 0, behavior: 'instant' });
+      const roots = document.querySelectorAll('main, [role="main"], article, [data-testid*="job"]');
+      roots.forEach((root) => {
+        try {
+          root.scrollTop = root.scrollHeight;
+        } catch (_) {}
+      });
+    } catch (_) {}
+  };
+  const fireClick = (el) => {
+    try {
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      if (typeof el.focus === 'function') {
+        try { el.focus({ preventScroll: true }); } catch (_) {}
+      }
+      el.click();
+      el.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    } catch (_) {}
   };
   const clickCandidates = () => {
-    const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], span, div'));
+    scrollNudge();
+    const byClass = Array.from(
+      document.querySelectorAll('button[class*="view-more-button"], [class*="view-more-button"]')
+    );
+    const sel = [
+      'button', 'a', '[role="button"]', '[role="link"]',
+      'span[tabindex]', 'div[tabindex]', 'div[role="button"]',
+    ].join(', ');
+    const seen = new Set();
+    const nodes = [];
+    for (const el of [...byClass, ...Array.from(document.querySelectorAll(sel))]) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      nodes.push(el);
+    }
     for (const el of nodes) {
-      if (!isVisible(el) || !shouldClick(el)) continue;
-      try { el.click(); } catch (_) {}
+      if (!isVisible(el) || !shouldClickEl(el)) continue;
+      fireClick(el);
     }
   };
-  clickCandidates();
-  setTimeout(clickCandidates, 400);
-  setTimeout(clickCandidates, 900);
+  const run = () => {
+    clickCandidates();
+  };
+  run();
+  [200, 450, 800, 1300, 2000, 3200, 5000, 7500, 10500, 14000, 17500, 21000].forEach((ms) => setTimeout(run, ms));
 })();
 """
 
@@ -137,11 +227,12 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
 
     settle_ms = state.get("job_detail_settle_timeout_ms")
     if settle_ms is None:
-        settle_ms = 8_000.0
+        # Expand script last pass ~21s; wait after so JD text is in DOM before /json.
+        settle_ms = 24_000.0
     try:
         settle_ms = float(settle_ms)
     except (TypeError, ValueError):
-        settle_ms = 8_000.0
+        settle_ms = 24_000.0
 
     custom_ai_model = (state.get("job_detail_custom_ai_model") or settings.job_detail_custom_ai_model or "").strip()
     custom_ai_auth = (settings.job_detail_custom_ai_authorization or "").strip()
@@ -163,6 +254,7 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
         page_html: str | None,
         goto_opts: Any,
         wait_for_timeout: Any,
+        prompt: str,
     ) -> object:
         if page_html is not None:
             return await client.browser_rendering.json.create(
@@ -172,7 +264,7 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
                 set_extra_http_headers=extra_headers,
                 best_attempt=best,
                 action_timeout=action_timeout,
-                prompt=_JOB_DETAIL_PROMPT,
+                prompt=prompt,
                 response_format=_JOB_DETAIL_RESPONSE_FORMAT,
                 timeout=180.0,
                 extra_body=custom_ai_extra_body,
@@ -186,7 +278,7 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
             goto_options=goto_opts,
             best_attempt=best,
             action_timeout=action_timeout,
-            prompt=_JOB_DETAIL_PROMPT,
+            prompt=prompt,
             response_format=_JOB_DETAIL_RESPONSE_FORMAT,
             wait_for_timeout=wait_for_timeout,
             timeout=180.0,
@@ -202,35 +294,42 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
         page_html: str | None = None,
         source: str,
     ) -> dict[str, Any]:
-        try:
-            raw = await call_json_extract(
-                client,
-                url=url if page_html is None else None,
-                page_html=page_html,
-                goto_opts=goto_opts,
-                wait_for_timeout=wait_for_timeout,
-            )
-        except APIStatusError as exc:
-            body = exc.body
-            if body is not None and not isinstance(body, str):
-                body = str(body)[:2000]
-            elif isinstance(body, str):
-                body = body[:2000]
-            return {
-                "url": url,
-                "extracted": None,
-                "error": f"HTTP {exc.status_code}: {exc.message}",
-                "cf_body": body,
-                "extract_source": source,
-            }
-        except CloudflareError as exc:
-            return {
-                "url": url,
-                "extracted": None,
-                "error": str(exc),
-                "cf_body": None,
-                "extract_source": source,
-            }
+        prompts = [_JOB_DETAIL_PROMPT, _JOB_DETAIL_PROMPT_RETRY]
+        raw: object | None = None
+        for attempt, prompt in enumerate(prompts):
+            try:
+                raw = await call_json_extract(
+                    client,
+                    url=url if page_html is None else None,
+                    page_html=page_html,
+                    goto_opts=goto_opts,
+                    wait_for_timeout=wait_for_timeout,
+                    prompt=prompt,
+                )
+                break
+            except APIStatusError as exc:
+                if exc.status_code == 422 and attempt + 1 < len(prompts):
+                    continue
+                body = exc.body
+                if body is not None and not isinstance(body, str):
+                    body = str(body)[:4000]
+                elif isinstance(body, str):
+                    body = body[:4000]
+                return {
+                    "url": url,
+                    "extracted": None,
+                    "error": f"HTTP {exc.status_code}: {exc.message}",
+                    "cf_body": body,
+                    "extract_source": source,
+                }
+            except CloudflareError as exc:
+                return {
+                    "url": url,
+                    "extracted": None,
+                    "error": str(exc),
+                    "cf_body": None,
+                    "extract_source": source,
+                }
 
         extracted = _unwrap_json_result(raw)
         return {

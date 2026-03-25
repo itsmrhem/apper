@@ -77,16 +77,23 @@ def main() -> None:
     parser.add_argument(
         "--job-detail-settle-ms",
         type=float,
-        default=8_000.0,
+        default=24_000.0,
         metavar="MS",
-        help="After page load, wait MS before /json extraction (SPA paint); default 8000.",
+        help="After page load + expand-more script, wait MS before /json extraction; default 24000 (Handshake JD).",
     )
     parser.add_argument(
         "--no-job-detail-markdown-fallback",
         action="store_true",
         help="Disable markdown render + /json(html) fallback when URL-based /json returns empty.",
     )
+    parser.add_argument(
+        "--application",
+        action="store_true",
+        help="After job details: tailor LaTeX resume + cover per job and compile PDFs (implies --job-details).",
+    )
     args = parser.parse_args()
+
+    with_job_details = bool(args.job_details or args.application)
 
     initial: dict[str, Any] = {
         "url": args.url,
@@ -98,7 +105,7 @@ def main() -> None:
             "timeout": min(args.timeout_ms, 60_000.0),
         }
 
-    if args.job_details:
+    if with_job_details:
         initial["max_job_details"] = max(0, args.max_job_details)
         initial["skip_first_listing_job_url"] = args.skip_first_listing_job
         initial["job_detail_null_retries"] = max(0, args.job_detail_null_retries)
@@ -118,7 +125,10 @@ def main() -> None:
             initial["seen_job_urls"] = [str(u) for u in seen]
 
     async def run():
-        graph = build_graph(with_job_details=args.job_details)
+        if args.application:
+            graph = build_graph(with_job_details=True, with_application=True)
+            return await graph.ainvoke(initial)
+        graph = build_graph(with_job_details=with_job_details)
         return await graph.ainvoke(initial)
 
     result = asyncio.run(run())
@@ -128,7 +138,18 @@ def main() -> None:
         html = out.get("rendered_html")
         if isinstance(html, str) and len(html) > 200_000:
             out["rendered_html"] = html[:200_000] + "\n... [truncated]"
+        pkgs = out.get("application_packages")
+        if isinstance(pkgs, list):
+            for p in pkgs:
+                if not isinstance(p, dict):
+                    continue
+                for k in ("resume_tex", "cover_tex"):
+                    s = p.get(k)
+                    if isinstance(s, str) and len(s) > 8_000:
+                        p[k] = s[:8_000] + "\n... [truncated]"
         print(json.dumps(out, indent=2, default=str))
+        if args.application and out.get("application_error"):
+            sys.exit(1)
         return
 
     err = result.get("error")
@@ -137,7 +158,7 @@ def main() -> None:
         sys.exit(1)
     html = result.get("rendered_html") or ""
     print(html)
-    if args.job_details and not args.json:
+    if with_job_details and not args.json:
         details = result.get("job_details")
         if details is not None:
             print("\n--- job details (structured) ---\n")
@@ -148,6 +169,26 @@ def main() -> None:
             print(f"\n[parse_job_links] {perr}", file=sys.stderr)
         if jerr:
             print(f"\n[job_details_json] {jerr}", file=sys.stderr)
+        tgerr = result.get("telegram_job_listing_error")
+        tgsent = result.get("telegram_job_listing_sent_count")
+        if tgerr:
+            print(f"\n[telegram_job_listing] {tgerr}", file=sys.stderr)
+        elif isinstance(tgsent, int):
+            print(f"\n[telegram_job_listing] sent {tgsent} message(s).", file=sys.stderr)
+        if args.application:
+            aerr = result.get("application_error")
+            if aerr:
+                print(f"\n[application] {aerr}", file=sys.stderr)
+            pkgs = result.get("application_packages")
+            if isinstance(pkgs, list) and pkgs:
+                print("\n--- application PDFs (paths on disk) ---\n")
+                for i, p in enumerate(pkgs):
+                    if not isinstance(p, dict):
+                        continue
+                    print(f"[{i}] resume: {p.get('resume_pdf_path', '')}")
+                    print(f"[{i}] cover:  {p.get('cover_pdf_path', '')}")
+            if aerr:
+                sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -12,3 +12,10 @@ build/
 .ruff_cache/
 # Exported browser cookies (never commit real tokens)
 secrets/handshake_cookies.json.example
+# Resume source (commit only *.md.example)
+secrets/additional_experience.md
+secrets/educational_experience.md
+secrets/projects.md
+secrets/resume_details.md
+# Resume LaTeX layout (personal); use secrets/blueprint.tex.example as template
+secrets/blueprint.tex
