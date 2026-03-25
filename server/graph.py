@@ -10,6 +10,7 @@ from server.nodes.application import (
 from server.nodes.browser_render import browser_render_node
 from server.nodes.job_details_json import job_details_json_node
 from server.nodes.parse_job_links import parse_job_links_node
+from server.nodes.telegram_job_listing import telegram_job_listing_node
 from server.state import GraphState
 from server.tracing import configure_langsmith
 
@@ -31,11 +32,14 @@ def build_graph(
 
     g.add_node("parse_job_links", parse_job_links_node)
     g.add_node("job_details_json", job_details_json_node)
+    g.add_node("telegram_job_listing", telegram_job_listing_node)
     g.add_edge("browser_render", "parse_job_links")
     g.add_edge("parse_job_links", "job_details_json")
+    # Send Telegram digest as soon as all /json job rows exist; before optional --application pipeline.
+    g.add_edge("job_details_json", "telegram_job_listing")
 
     if not with_application:
-        g.add_edge("job_details_json", END)
+        g.add_edge("telegram_job_listing", END)
         return g.compile(checkpointer=checkpointer)
 
     g.add_node("load_application_sources", load_application_sources_node)
@@ -44,7 +48,7 @@ def build_graph(
     g.add_node("generate_cover_texes", generate_cover_texes_node)
     g.add_node("compile_cover_pdfs", compile_cover_pdfs_node)
 
-    g.add_edge("job_details_json", "load_application_sources")
+    g.add_edge("telegram_job_listing", "load_application_sources")
     g.add_edge("load_application_sources", "generate_resume_texes")
     g.add_edge("generate_resume_texes", "compile_resume_pdfs")
     g.add_edge("compile_resume_pdfs", "generate_cover_texes")

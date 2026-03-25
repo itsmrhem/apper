@@ -77,9 +77,9 @@ def main() -> None:
     parser.add_argument(
         "--job-detail-settle-ms",
         type=float,
-        default=14_000.0,
+        default=24_000.0,
         metavar="MS",
-        help="After page load + expand-more script, wait MS before /json extraction; default 14000 (Handshake descriptions).",
+        help="After page load + expand-more script, wait MS before /json extraction; default 24000 (Handshake JD).",
     )
     parser.add_argument(
         "--no-job-detail-markdown-fallback",
@@ -169,6 +169,12 @@ def main() -> None:
             print(f"\n[parse_job_links] {perr}", file=sys.stderr)
         if jerr:
             print(f"\n[job_details_json] {jerr}", file=sys.stderr)
+        tgerr = result.get("telegram_job_listing_error")
+        tgsent = result.get("telegram_job_listing_sent_count")
+        if tgerr:
+            print(f"\n[telegram_job_listing] {tgerr}", file=sys.stderr)
+        elif isinstance(tgsent, int):
+            print(f"\n[telegram_job_listing] sent {tgsent} message(s).", file=sys.stderr)
         if args.application:
             aerr = result.get("application_error")
             if aerr:

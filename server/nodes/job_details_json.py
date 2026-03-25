@@ -94,21 +94,45 @@ _EXPAND_MORE_SCRIPT = """
   const shouldClickAria = (rawAria) => {
     const a = String(rawAria || '').trim().toLowerCase();
     if (!a) return false;
-    // Handshake: aria-label="Show more (What does … ?)" — long; match prefix only.
     if (/^show\\s+more\\b/.test(a)) return true;
     if (/\\b(read|see|view)\\s+more\\b/.test(a)) return true;
     if (/\\bexpand\\b/.test(a) && a.length < 200) return true;
     return false;
   };
   const shouldClickEl = (el) => {
+    // Handshake official control: do not use inMainContent — some layouts nest oddly and we would skip.
+    if (hasHandshakeViewMore(el)) return isVisible(el);
     if (!inMainContent(el)) return false;
-    if (hasHandshakeViewMore(el)) return true;
     const t = norm(el.innerText || el.textContent || '');
     if (shouldClickText(t)) return true;
     if (shouldClickAria(el.getAttribute('aria-label'))) return true;
     return false;
   };
+  const scrollNudge = () => {
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      window.scrollTo({ top: document.documentElement.scrollHeight, left: 0, behavior: 'instant' });
+      const roots = document.querySelectorAll('main, [role="main"], article, [data-testid*="job"]');
+      roots.forEach((root) => {
+        try {
+          root.scrollTop = root.scrollHeight;
+        } catch (_) {}
+      });
+    } catch (_) {}
+  };
+  const fireClick = (el) => {
+    try {
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      if (typeof el.focus === 'function') {
+        try { el.focus({ preventScroll: true }); } catch (_) {}
+      }
+      el.click();
+      el.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    } catch (_) {}
+  };
   const clickCandidates = () => {
+    scrollNudge();
     const byClass = Array.from(
       document.querySelectorAll('button[class*="view-more-button"], [class*="view-more-button"]')
     );
@@ -125,15 +149,14 @@ _EXPAND_MORE_SCRIPT = """
     }
     for (const el of nodes) {
       if (!isVisible(el) || !shouldClickEl(el)) continue;
-      try {
-        el.scrollIntoView({ block: 'center', inline: 'nearest' });
-        el.click();
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-      } catch (_) {}
+      fireClick(el);
     }
   };
-  clickCandidates();
-  [250, 600, 1200, 2200, 4000, 6500].forEach((ms) => setTimeout(clickCandidates, ms));
+  const run = () => {
+    clickCandidates();
+  };
+  run();
+  [200, 450, 800, 1300, 2000, 3200, 5000, 7500, 10500, 14000, 17500, 21000].forEach((ms) => setTimeout(run, ms));
 })();
 """
 
@@ -204,12 +227,12 @@ async def job_details_json_node(state: GraphState) -> dict[str, Any]:
 
     settle_ms = state.get("job_detail_settle_timeout_ms")
     if settle_ms is None:
-        # Handshake often hides full description behind "more"; delayed clicks run up to ~6.5s.
-        settle_ms = 14_000.0
+        # Expand script last pass ~21s; wait after so JD text is in DOM before /json.
+        settle_ms = 24_000.0
     try:
         settle_ms = float(settle_ms)
     except (TypeError, ValueError):
-        settle_ms = 8_000.0
+        settle_ms = 24_000.0
 
     custom_ai_model = (state.get("job_detail_custom_ai_model") or settings.job_detail_custom_ai_model or "").strip()
     custom_ai_auth = (settings.job_detail_custom_ai_authorization or "").strip()
