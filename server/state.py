@@ -35,9 +35,15 @@ class GraphState(TypedDict, total=False):
     job_details_error: str | None
     # Extra /json attempts per URL when extraction is null/empty (default 1 in node).
     job_detail_null_retries: int
-    # After navigation, wait this many ms before AI extraction (SPA paint); default 8000 in node.
+    # After navigation, wait this many ms before AI extraction (SPA paint + “read more”); default 14000 in node.
     job_detail_settle_timeout_ms: float
     # If /json still empty, render markdown then extract from that text (extra API calls).
     job_detail_markdown_fallback: bool
     # Optional Cloudflare /json custom AI override.
     job_detail_custom_ai_model: str
+
+    # Job application pipeline (LaTeX → PDF per job)
+    application_sources_text: str
+    application_resume_blueprint_tex: str
+    application_packages: list[dict[str, Any]]
+    application_error: str | None

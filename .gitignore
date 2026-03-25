@@ -17,3 +17,5 @@ secrets/additional_experience.md
 secrets/educational_experience.md
 secrets/projects.md
 secrets/resume_details.md
+# Resume LaTeX layout (personal); use secrets/blueprint.tex.example as template
+secrets/blueprint.tex
